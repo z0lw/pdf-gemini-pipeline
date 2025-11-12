@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+"""Split PDFs, run Yomitoku HTML on each half page, then ask Gemini for JSON."""
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import os
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Optional, Sequence
+
+import fitz  # PyMuPDF
+import google.generativeai as genai
+from pypdf import PdfReader, PdfWriter
+
+ROOT = Path(__file__).resolve().parent
+DOTENV = ROOT / ".env"
+
+
+@dataclass
+class Config:
+    pdf: Optional[Path]
+    pdf_dir: Optional[Path]
+    prompt_path: Path
+    output_dir: Path
+    device: str
+    model: str
+    yomitoku_cmd: Path
+
+
+@dataclass
+class HalfPage:
+    page_index: int
+    side: str  # l / r
+    pdf_path: Path
+    image_path: Path
+
+    @property
+    def label(self) -> str:
+        return f"p{self.page_index + 1:02d}_{self.side}"
+
+
+def load_env(path: Path = DOTENV) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def _env_path(key: str, fallback: Optional[Path]) -> Optional[Path]:
+    value = os.environ.get(key)
+    if value is None:
+        return fallback
+    if not value:
+        return None
+    return Path(value).expanduser()
+
+
+def _env_text(key: str, default: str) -> str:
+    value = os.environ.get(key)
+    return value if value else default
+
+
+def resolve_config() -> Config:
+    load_env()
+    pdf = _env_path("PDF_INPUT", None)
+    pdf_dir = _env_path("PDF_INPUT_DIR", ROOT / "input_pdfs")
+    prompt_path = (_env_path("PROMPT_PATH", ROOT / "prompt.md") or (ROOT / "prompt.md")).resolve()
+    output_dir = (_env_path("OUTPUT_DIR", ROOT / "outputs") or (ROOT / "outputs")).resolve()
+    device = _env_text("DEVICE", "cuda")
+    model = _env_text("GEMINI_MODEL", "models/gemini-2.5-flash")
+    yomitoku_cmd = (_env_path("YOMITOKU_CMD", ROOT / "yomitoku") or (ROOT / "yomitoku")).resolve()
+    pdf_dir = pdf_dir.resolve() if pdf_dir else None
+    pdf = pdf.resolve() if pdf else None
+    return Config(pdf, pdf_dir, prompt_path, output_dir, device, model, yomitoku_cmd)
+
+
+def iter_pdfs(single: Optional[Path], folder: Optional[Path]) -> List[Path]:
+    if single:
+        if not single.exists():
+            raise FileNotFoundError(single)
+        return [single]
+    if folder is None:
+        raise ValueError("PDF_INPUT or PDF_INPUT_DIR must be set.")
+    if not folder.exists():
+        raise FileNotFoundError(folder)
+    pdfs = sorted(folder.glob("*.pdf"))
+    if not pdfs:
+        raise FileNotFoundError(f"No PDFs in {folder}")
+    return pdfs
+
+
+def safe_name(path: Path) -> str:
+    text = path.stem
+    cleaned = "".join(ch if ch.isalnum() else "_" for ch in text)
+    cleaned = cleaned.strip("_")
+    return cleaned or "pdf"
+
+
+def split_pdf(pdf_path: Path, out_dir: Path) -> List[HalfPage]:
+    reader = PdfReader(str(pdf_path))
+    halves: List[HalfPage] = []
+    (out_dir / "pdf_pages").mkdir(parents=True, exist_ok=True)
+
+    for page_index, page in enumerate(reader.pages):
+        width = float(page.mediabox.width)
+        height = float(page.mediabox.height)
+        x_mid = width / 2.0
+
+        for side, (x0, x1) in {"l": (0.0, x_mid), "r": (x_mid, width)}.items():
+            writer = PdfWriter()
+            new_page = copy.deepcopy(page)
+            new_page.mediabox.lower_left = (x0, 0.0)
+            new_page.mediabox.upper_right = (x1, height)
+            writer.add_page(new_page)
+
+            half_pdf = out_dir / "pdf_pages" / f"{pdf_path.stem}_p{page_index + 1:02d}_{side.upper()}.pdf"
+            with half_pdf.open("wb") as handle:
+                writer.write(handle)
+
+            half_png = half_pdf.with_suffix(".png")
+            render_pdf_page(half_pdf, half_png)
+            halves.append(HalfPage(page_index, side, half_pdf, half_png))
+    return halves
+
+
+def render_pdf_page(pdf_path: Path, png_path: Path, dpi: int = 300) -> None:
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[0]
+        pix = page.get_pixmap(dpi=dpi)
+        pix.save(png_path)
+    finally:
+        doc.close()
+
+
+def run_yomitoku(image_path: Path, page_dir: Path, device: str, yomitoku_cmd: Path) -> Path:
+    page_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        str(yomitoku_cmd),
+        str(image_path),
+        "-f",
+        "html",
+        "-o",
+        str(page_dir),
+        "-d",
+        device,
+    ]
+    subprocess.run(cmd, check=True)
+    html_files = sorted(page_dir.glob("*.html"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not html_files:
+        raise FileNotFoundError(f"No Yomitoku HTML in {page_dir}")
+    return html_files[0]
+
+
+def build_model(api_key: str, model_name: str):
+    genai.configure(api_key=api_key)
+    return genai.GenerativeModel(model_name)
+
+
+def upload_file(path: Path):
+    return genai.upload_file(path=str(path))
+
+
+def call_gemini(model, prompt_text: str, pdf_path: Path, html_path: Path) -> str:
+    uploads = []
+    try:
+        pdf_file = upload_file(pdf_path)
+        html_file = upload_file(html_path)
+        uploads.extend([pdf_file, html_file])
+        response = model.generate_content(
+            [prompt_text, pdf_file, html_file],
+            request_options={"timeout": 600},
+        )
+        return response.text or ""
+    finally:
+        for uploaded in uploads:
+            try:
+                genai.delete_file(uploaded.name)
+            except Exception:
+                pass
+
+
+def write_json(target: Path, payload: str) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    data = payload.strip()
+    if data:
+        try:
+            parsed = json.loads(data)
+            target.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
+            return
+        except json.JSONDecodeError:
+            pass
+    target.write_text(data, encoding="utf-8")
+
+
+def process_pdf(pdf_path: Path, cfg: Config, prompt_text: str, model) -> None:
+    safe = safe_name(pdf_path)
+    pdf_out = cfg.output_dir / safe
+    halves = split_pdf(pdf_path, pdf_out)
+
+    for half in halves:
+        page_dir = pdf_out / half.label
+        html_path = run_yomitoku(half.image_path, page_dir, cfg.device, cfg.yomitoku_cmd)
+        gemini_text = call_gemini(model, prompt_text, half.pdf_path, html_path)
+        json_target = pdf_out / f"{pdf_path.stem}_{half.label}.json"
+        write_json(json_target, gemini_text)
+        print(f"[DONE] {pdf_path.name} -> {half.label} -> {json_target}")
+
+
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    parser = argparse.ArgumentParser(description="PDF -> Yomitoku HTML -> Gemini JSON pipeline")
+    parser.add_argument("--pdf", type=Path, default=None, help="Single PDF override")
+    parser.add_argument("--pdf-dir", type=Path, default=None, help="Directory override")
+    parser.add_argument("--prompt", type=Path, default=None, help="Prompt override")
+    parser.add_argument("--output", type=Path, default=None, help="Output directory override")
+    parser.add_argument("--device", choices=["cpu", "cuda"], default=None)
+    parser.add_argument("--model", type=str, default=None)
+    parser.add_argument("--yomitoku", type=Path, default=None)
+    args = parser.parse_args(argv)
+
+    cfg = resolve_config()
+    if args.pdf is not None:
+        cfg.pdf = args.pdf
+    if args.pdf_dir is not None:
+        cfg.pdf_dir = args.pdf_dir
+    if args.prompt is not None:
+        cfg.prompt_path = args.prompt
+    if args.output is not None:
+        cfg.output_dir = args.output
+    if args.device is not None:
+        cfg.device = args.device
+    if args.model is not None:
+        cfg.model = args.model
+    if args.yomitoku is not None:
+        cfg.yomitoku_cmd = args.yomitoku
+
+    pdfs = iter_pdfs(cfg.pdf, cfg.pdf_dir)
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise EnvironmentError("GEMINI_API_KEY must be stored in .env")
+
+    cfg.output_dir.mkdir(parents=True, exist_ok=True)
+    prompt_text = cfg.prompt_path.read_text(encoding="utf-8")
+    model = build_model(api_key, cfg.model)
+
+    for pdf in pdfs:
+        process_pdf(pdf, cfg, prompt_text, model)
+
+
+if __name__ == "__main__":
+    main()
