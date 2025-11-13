@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence
@@ -29,6 +30,8 @@ class Config:
     device: str
     model: str
     yomitoku_cmd: Path
+    max_workers: int = 4
+    max_page_workers: int = 4
 
 
 @dataclass
@@ -80,9 +83,11 @@ def resolve_config() -> Config:
     device = _env_text("DEVICE", "cuda")
     model = _env_text("GEMINI_MODEL", "models/gemini-2.5-flash")
     yomitoku_cmd = (_env_path("YOMITOKU_CMD", ROOT / "yomitoku") or (ROOT / "yomitoku")).resolve()
+    max_workers = int(_env_text("MAX_WORKERS", "4"))
+    max_page_workers = int(_env_text("MAX_PAGE_WORKERS", "4"))
     pdf_dir = pdf_dir.resolve() if pdf_dir else None
     pdf = pdf.resolve() if pdf else None
-    return Config(pdf, pdf_dir, prompt_path, output_dir, device, model, yomitoku_cmd)
+    return Config(pdf, pdf_dir, prompt_path, output_dir, device, model, yomitoku_cmd, max_workers, max_page_workers)
 
 
 def iter_pdfs(single: Optional[Path], folder: Optional[Path]) -> List[Path]:
@@ -251,19 +256,38 @@ def write_json(target: Path, payload: str, year_tag: Optional[str]) -> None:
     target.write_text(fallback, encoding="utf-8")
 
 
+def process_half_page(half: HalfPage, pdf_path: Path, cfg: Config, prompt_text: str, model, year_tag: str) -> None:
+    """Process a single half page: Yomitoku OCR + Gemini API call."""
+    safe = safe_name(pdf_path)
+    pdf_out = cfg.output_dir / safe
+    page_dir = pdf_out / half.label
+
+    html_path = run_yomitoku(half.image_path, page_dir, cfg.device, cfg.yomitoku_cmd)
+    gemini_text = call_gemini(model, prompt_text, half.pdf_path, html_path)
+    json_target = pdf_out / f"{pdf_path.stem}_{half.label}.json"
+    write_json(json_target, gemini_text, year_tag)
+    print(f"[DONE] {pdf_path.name} -> {half.label} -> {json_target}")
+
+
 def process_pdf(pdf_path: Path, cfg: Config, prompt_text: str, model) -> None:
+    """Process a PDF: split into halves and process them in parallel."""
     safe = safe_name(pdf_path)
     pdf_out = cfg.output_dir / safe
     halves = split_pdf(pdf_path, pdf_out)
-
     year_tag = pdf_path.stem
-    for half in halves:
-        page_dir = pdf_out / half.label
-        html_path = run_yomitoku(half.image_path, page_dir, cfg.device, cfg.yomitoku_cmd)
-        gemini_text = call_gemini(model, prompt_text, half.pdf_path, html_path)
-        json_target = pdf_out / f"{pdf_path.stem}_{half.label}.json"
-        write_json(json_target, gemini_text, year_tag)
-        print(f"[DONE] {pdf_path.name} -> {half.label} -> {json_target}")
+
+    # Process half pages in parallel
+    with ThreadPoolExecutor(max_workers=cfg.max_page_workers) as executor:
+        futures = {
+            executor.submit(process_half_page, half, pdf_path, cfg, prompt_text, model, year_tag): half
+            for half in halves
+        }
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as exc:
+                half = futures[future]
+                print(f"[ERROR] {pdf_path.name} -> {half.label} failed: {exc}")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
@@ -275,6 +299,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     parser.add_argument("--device", choices=["cpu", "cuda"], default=None)
     parser.add_argument("--model", type=str, default=None)
     parser.add_argument("--yomitoku", type=Path, default=None)
+    parser.add_argument("--max-workers", type=int, default=None, help="Max parallel PDFs")
+    parser.add_argument("--max-page-workers", type=int, default=None, help="Max parallel pages per PDF")
     args = parser.parse_args(argv)
 
     cfg = resolve_config()
@@ -292,6 +318,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         cfg.model = args.model
     if args.yomitoku is not None:
         cfg.yomitoku_cmd = args.yomitoku
+    if args.max_workers is not None:
+        cfg.max_workers = args.max_workers
+    if args.max_page_workers is not None:
+        cfg.max_page_workers = args.max_page_workers
 
     pdfs = iter_pdfs(cfg.pdf, cfg.pdf_dir)
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -302,8 +332,20 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     prompt_text = cfg.prompt_path.read_text(encoding="utf-8")
     model = build_model(api_key, cfg.model)
 
-    for pdf in pdfs:
-        process_pdf(pdf, cfg, prompt_text, model)
+    print(f"Processing {len(pdfs)} PDF(s) with max_workers={cfg.max_workers}, max_page_workers={cfg.max_page_workers}")
+
+    # Process multiple PDFs in parallel
+    with ThreadPoolExecutor(max_workers=cfg.max_workers) as executor:
+        futures = {
+            executor.submit(process_pdf, pdf, cfg, prompt_text, model): pdf
+            for pdf in pdfs
+        }
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as exc:
+                pdf = futures[future]
+                print(f"[ERROR] Processing {pdf.name} failed: {exc}")
 
 
 if __name__ == "__main__":
