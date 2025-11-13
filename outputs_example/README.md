@@ -1,23 +1,23 @@
-# 出力例
+# 出力フォルダの例
 
-このフォルダには、パイプライン実行後の出力例が含まれています。
+このフォルダは、パイプライン実行後の出力構造の参考例です。
 
 ## フォルダ構造
 
 ```
-outputs_example/
-└── sample_pdf/                    # 元PDFのファイル名（拡張子なし）
-    ├── pdf_pages/                 # 分割されたPDF/PNG画像
-    │   ├── sample_pdf_p01_L.pdf   # 1ページ目の左半分（PDF）
-    │   ├── sample_pdf_p01_L.png   # 1ページ目の左半分（PNG画像）
-    │   ├── sample_pdf_p01_R.pdf   # 1ページ目の右半分（PDF）
-    │   └── sample_pdf_p01_R.png   # 1ページ目の右半分（PNG画像）
-    ├── p01_l/                     # 1ページ目左半分のYomitoku出力
-    │   └── output.html            # YomitokuによるHTML（OCR結果）
-    ├── p01_r/                     # 1ページ目右半分のYomitoku出力
-    │   └── output.html            # YomitokuによるHTML（OCR結果）
-    ├── sample_pdf_p01_l.json      # 1ページ目左半分のGemini解析結果（JSON）
-    └── sample_pdf_p01_r.json      # 1ページ目右半分のGemini解析結果（JSON）
+outputs/                      # ← 実際の出力先フォルダ
+└── 2024/                     # 元PDFのファイル名（拡張子なし）
+    ├── pdf_pages/            # 分割されたPDF/PNG画像
+    │   ├── 2024_p01_L.pdf    # 1ページ目の左半分（PDF）
+    │   ├── 2024_p01_L.png    # 1ページ目の左半分（PNG画像）
+    │   ├── 2024_p01_R.pdf    # 1ページ目の右半分（PDF）
+    │   └── 2024_p01_R.png    # 1ページ目の右半分（PNG画像）
+    ├── p01_l/                # 1ページ目左半分のYomitoku出力
+    │   └── output.html       # YomitokuによるHTML（OCR結果）
+    ├── p01_r/                # 1ページ目右半分のYomitoku出力
+    │   └── output.html       # YomitokuによるHTML（OCR結果）
+    ├── 2024_p01_l.json       # 1ページ目左半分のGemini解析結果（JSON）
+    └── 2024_p01_r.json       # 1ページ目右半分のGemini解析結果（JSON）
 ```
 
 ## ファイルの説明
