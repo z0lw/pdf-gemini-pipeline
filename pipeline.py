@@ -214,13 +214,26 @@ def _extract_json_payload(payload: str) -> tuple[str, Optional[object]]:
 
 
 def _attach_year(parsed: object, year_tag: Optional[str]) -> object:
-    """Ensure `year` is the leading key when parsed JSON is a dict."""
-    if not year_tag or not isinstance(parsed, dict):
+    """Ensure `year` is the leading key when parsed JSON is a dict or list."""
+    if not year_tag:
         return parsed
-    remainder = {key: value for key, value in parsed.items() if key != "year"}
-    ordered = {"year": year_tag}
-    ordered.update(remainder)
-    return ordered
+    if isinstance(parsed, dict):
+        remainder = {key: value for key, value in parsed.items() if key != "year"}
+        ordered = {"year": year_tag}
+        ordered.update(remainder)
+        return ordered
+    if isinstance(parsed, list):
+        result = []
+        for item in parsed:
+            if isinstance(item, dict):
+                remainder = {key: value for key, value in item.items() if key != "year"}
+                ordered = {"year": year_tag}
+                ordered.update(remainder)
+                result.append(ordered)
+            else:
+                result.append(item)
+        return result
+    return parsed
 
 
 def write_json(target: Path, payload: str, year_tag: Optional[str]) -> None:
