@@ -62,6 +62,8 @@ python pipeline.py --pdf ".\input_pdfs\sample.pdf" --device cpu
 - `pXX_l`, `pXX_r` … 各半ページの Yomitoku HTML
 - `<元PDF名>_pXX_{l|r}.json` … Gemini 応答（JSON 整形済み）
 
+各 JSON にはトップレベルに `year` フィールドが追加され、拡張子を除いた元 PDF 名（例: `2025年調査集計表_90-93`）が格納されます。後段で複数年度を比較する際に利用してください。
+
 ### 備考
 - `prompt.md` に既定のプロンプトを同梱しました。内容を編集すればそのまま反映されます。
 - GPU が使えない環境では `.env` の `DEVICE` を `cpu` に変更してください。

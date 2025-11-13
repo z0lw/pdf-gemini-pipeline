@@ -190,16 +190,21 @@ def call_gemini(model, prompt_text: str, pdf_path: Path, html_path: Path) -> str
                 pass
 
 
-def write_json(target: Path, payload: str) -> None:
+def write_json(target: Path, payload: str, year_tag: Optional[str]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     data = payload.strip()
     if data:
         try:
             parsed = json.loads(data)
+            if isinstance(parsed, dict) and year_tag:
+                parsed["year"] = year_tag
             target.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
             return
         except json.JSONDecodeError:
-            pass
+            if year_tag:
+                wrapped = {"year": year_tag, "raw": data}
+                target.write_text(json.dumps(wrapped, ensure_ascii=False, indent=2), encoding="utf-8")
+                return
     target.write_text(data, encoding="utf-8")
 
 
@@ -208,12 +213,13 @@ def process_pdf(pdf_path: Path, cfg: Config, prompt_text: str, model) -> None:
     pdf_out = cfg.output_dir / safe
     halves = split_pdf(pdf_path, pdf_out)
 
+    year_tag = pdf_path.stem
     for half in halves:
         page_dir = pdf_out / half.label
         html_path = run_yomitoku(half.image_path, page_dir, cfg.device, cfg.yomitoku_cmd)
         gemini_text = call_gemini(model, prompt_text, half.pdf_path, html_path)
         json_target = pdf_out / f"{pdf_path.stem}_{half.label}.json"
-        write_json(json_target, gemini_text)
+        write_json(json_target, gemini_text, year_tag)
         print(f"[DONE] {pdf_path.name} -> {half.label} -> {json_target}")
 
 
