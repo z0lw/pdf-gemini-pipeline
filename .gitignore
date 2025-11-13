@@ -4,3 +4,4 @@ outputs/
 *.log
 .env
 input_pdfs/
+.claude/settings.local.json
