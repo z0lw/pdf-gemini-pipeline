@@ -6,6 +6,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -190,22 +191,51 @@ def call_gemini(model, prompt_text: str, pdf_path: Path, html_path: Path) -> str
                 pass
 
 
+CODE_FENCE = re.compile(r"```(?:json|javascript|js)?\s*([\s\S]+?)\s*```", re.IGNORECASE)
+
+
+def _extract_json_payload(payload: str) -> tuple[str, Optional[object]]:
+    """Return cleaned text plus parsed JSON if possible."""
+    text = payload.strip()
+    match = CODE_FENCE.search(text)
+    if match:
+        text = match.group(1).strip()
+    text = text.lstrip("\ufeff").lstrip()
+    start_index = next((idx for idx, ch in enumerate(text) if ch in "{["), None)
+    candidate = text[start_index:] if start_index is not None else text
+    if not candidate:
+        return "", None
+    decoder = json.JSONDecoder()
+    try:
+        parsed, _ = decoder.raw_decode(candidate)
+        return candidate.strip(), parsed
+    except json.JSONDecodeError:
+        return candidate.strip(), None
+
+
+def _attach_year(parsed: object, year_tag: Optional[str]) -> object:
+    """Ensure `year` is the leading key when parsed JSON is a dict."""
+    if not year_tag or not isinstance(parsed, dict):
+        return parsed
+    remainder = {key: value for key, value in parsed.items() if key != "year"}
+    ordered = {"year": year_tag}
+    ordered.update(remainder)
+    return ordered
+
+
 def write_json(target: Path, payload: str, year_tag: Optional[str]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
-    data = payload.strip()
-    if data:
-        try:
-            parsed = json.loads(data)
-            if isinstance(parsed, dict) and year_tag:
-                parsed["year"] = year_tag
-            target.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
-            return
-        except json.JSONDecodeError:
-            if year_tag:
-                wrapped = {"year": year_tag, "raw": data}
-                target.write_text(json.dumps(wrapped, ensure_ascii=False, indent=2), encoding="utf-8")
-                return
-    target.write_text(data, encoding="utf-8")
+    cleaned, parsed = _extract_json_payload(payload)
+    if parsed is not None:
+        parsed = _attach_year(parsed, year_tag)
+        target.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
+        return
+    fallback = cleaned or payload.strip()
+    if year_tag:
+        wrapped = {"year": year_tag, "raw": fallback}
+        target.write_text(json.dumps(wrapped, ensure_ascii=False, indent=2), encoding="utf-8")
+        return
+    target.write_text(fallback, encoding="utf-8")
 
 
 def process_pdf(pdf_path: Path, cfg: Config, prompt_text: str, model) -> None:
