@@ -40,22 +40,25 @@
 **2. 列ヘッダーの抽出:**
 
 *   各データ列について、以下の情報を含むオブジェクトとして扱います:
-    *   `column_index`: 列番号（左から数えて1始まりの数値）
+    *   `page_column_index`: ページ全体での列番号（ページ内の左端から数えて1始まりの数値）
+    *   `column_index`: 各indicator内での列番号（各indicatorの左端から数えて1始まりの数値）
     *   `header`: 列ヘッダーテキスト（各データ列の直上にあるヘッダー）
     *   `value`: データ値
-*   **【重要】親ヘッダーとの結合禁止:**
-    *   **複数階層の列ヘッダーがある場合でも、親ヘッダー（上位のまとめヘッダー）と子ヘッダー（各データ列の直上のヘッダー）を結合してはいけません。**
-    *   `header`として使用するのは、**各データ列の直上にあるヘッダーテキストのみ**です。
-    *   例：「総開口部数」という親ヘッダーの下に「窓」という子ヘッダーがある場合、`header`は「窓」であり、「総開口部数_窓」ではありません。
+*   **【重要】大タイトル（indicator）との結合禁止:**
+    *   **`indicator`として抽出される大タイトル（例：「6－①．総開口部数」）を、列ヘッダーと結合してはいけません。**
+    *   大タイトルは`indicator`キーに格納され、列ヘッダーは各列の`header`キーに格納されます。これらは別々に扱います。
+*   **複数階層の列ヘッダーの扱い:**
+    *   表の列ヘッダーが複数行の場合、それらを適切に結合して`header`として使用してください。
+    *   ただし、大タイトル（`indicator`）とは結合しません。
 *   **列ヘッダー抽出の基本ルール:**
-    *   HTMLが提供されている場合は、HTMLを参考にして列ヘッダーを特定してください。HTMLが不完全な場合は画像を参照してください。
-    *   列ヘッダーのテキストは**一切変更・省略・追加・解釈せず、画像とHTMLに書かれている文字列を一字一句そのまま使用**してください。
+    *   HTMLを参考にして列ヘッダーを特定してください。HTMLが不完全な場合は画像を参照してください。HTMLは不完全な場合があるので、必ず画像からも読み取ってください。
     *   改行（`<br/>`など）が含まれている場合は除去してください。
     *   単位表記（例：「(%)」「(棟)」など）が列ヘッダーに含まれている場合は、それも含めてください。
     *   全角・半角の記号（例：「－」「＋」「．」「×」）や空白についても、画像に表示されているものを厳密に再現してください。
     *   数値データの列と列ヘッダーの位置関係を正確に対応させ、列のズレが発生しないよう注意してください。
 *   **列番号による一意性の確保:**
-    *   同じ`indicator`内で列ヘッダー名が重複する場合でも、`column_index`が異なるため一意に識別できます。
+    *   同じ`indicator`内で列ヘッダー名が重複する場合でも、`column_index`と`page_column_index`が異なるため一意に識別できます。
+    *   `page_column_index`により、ページ全体での列の位置を把握できます。
 
 **3. 【最重要】表の構造認識に関するルール:**
 
@@ -70,7 +73,8 @@
 *   `総計`キーの値は、**配列 `[]`** とします。
 *   各indicatorに対応する表の一番上の行にある全体の合計値について、各データ列ごとにオブジェクトを作成し、配列に追加してください。
 *   各オブジェクトは以下のキーを持ちます:
-    *   `column_index`: 列番号（左から数えて1始まりの数値）
+    *   `page_column_index`: ページ全体での列番号（**ルール2**に従って設定）
+    *   `column_index`: 各indicator内での列番号（**ルール2**に従って設定）
     *   `header`: 列ヘッダーテキスト（**ルール2**に従って抽出）
     *   `value`: 合計値（数値型、または`null`）
 
@@ -87,7 +91,8 @@
     *   **手順3: データの格納**
         *   `columns`には、その行の各データ列についてのオブジェクトを格納する**配列 `[]`** を作成します。
         *   各オブジェクトは以下のキーを持ちます:
-            *   `column_index`: 列番号（左から数えて1始まりの数値）
+            *   `page_column_index`: ページ全体での列番号（**ルール2**に従って設定）
+            *   `column_index`: 各indicator内での列番号（**ルール2**に従って設定）
             *   `header`: 列ヘッダーテキスト（**ルール2**に従って抽出）
             *   `value`: データ値（数値型、または`null`）
 
@@ -103,7 +108,6 @@
 
 *   上記のルールに従ったJSONコードブロックのみを出力してください。説明文や前置きは一切不要です。
 *   **（参考）** 出力されるJSONは配列形式で、各要素には以下のキーが含まれます:
-    *   `year`: 年情報（後処理で追加されます）
     *   `indicator`: 主要タイトル（画像上部から抽出）
     *   `code_display`: 階層コードの元の文字列（例：「Ⅰ-1-⑴-①」）
     *   `code`: 階層構造オブジェクト（part/chapter/section/itemを数値で保持）
@@ -120,36 +124,34 @@
 ```json
 [
   {
-    "year": "2023",
-    "indicator": "6－①．総開口部数",
-    "code_display": "6－①",
+    "year": "YYYY",
+    "indicator": "X－Y．タイトル例",
+    "code_display": "X－Y",
     "code": {
       "part": null,
-      "chapter": 6,
+      "chapter": 1,
       "section": 1,
       "item": null
     },
-    "page": 42,
+    "page": 99,
     "総計": [
       {
+        "page_column_index": 1,
         "column_index": 1,
-        "header": "窓＋勝手口＋玄関",
-        "value": 15234
+        "header": "列ヘッダーA",
+        "value": 12345
       },
       {
+        "page_column_index": 2,
         "column_index": 2,
-        "header": "窓",
-        "value": 12456
+        "header": "列ヘッダーB",
+        "value": 67890
       },
       {
+        "page_column_index": 3,
         "column_index": 3,
-        "header": "勝手口",
-        "value": 1890
-      },
-      {
-        "column_index": 4,
-        "header": "玄関",
-        "value": 888
+        "header": "列ヘッダーC",
+        "value": 11111
       }
     ],
     "データ一覧": [
@@ -158,24 +160,22 @@
         "name": "北海道",
         "columns": [
           {
+            "page_column_index": 1,
             "column_index": 1,
-            "header": "窓＋勝手口＋玄関",
-            "value": 1234
+            "header": "列ヘッダーA",
+            "value": 123
           },
           {
+            "page_column_index": 2,
             "column_index": 2,
-            "header": "窓",
-            "value": 1000
+            "header": "列ヘッダーB",
+            "value": 456
           },
           {
+            "page_column_index": 3,
             "column_index": 3,
-            "header": "勝手口",
-            "value": 150
-          },
-          {
-            "column_index": 4,
-            "header": "玄関",
-            "value": 84
+            "header": "列ヘッダーC",
+            "value": 789
           }
         ]
       },
@@ -184,23 +184,21 @@
         "name": "青森",
         "columns": [
           {
+            "page_column_index": 1,
             "column_index": 1,
-            "header": "窓＋勝手口＋玄関",
+            "header": "列ヘッダーA",
             "value": null
           },
           {
+            "page_column_index": 2,
             "column_index": 2,
-            "header": "窓",
+            "header": "列ヘッダーB",
             "value": null
           },
           {
+            "page_column_index": 3,
             "column_index": 3,
-            "header": "勝手口",
-            "value": null
-          },
-          {
-            "column_index": 4,
-            "header": "玄関",
+            "header": "列ヘッダーC",
             "value": null
           }
         ]
@@ -210,55 +208,50 @@
         "name": "東北",
         "columns": [
           {
+            "page_column_index": 1,
             "column_index": 1,
-            "header": "窓＋勝手口＋玄関",
-            "value": 2345
+            "header": "列ヘッダーA",
+            "value": 234
           },
           {
+            "page_column_index": 2,
             "column_index": 2,
-            "header": "窓",
-            "value": 1890
+            "header": "列ヘッダーB",
+            "value": 567
           },
           {
+            "page_column_index": 3,
             "column_index": 3,
-            "header": "勝手口",
-            "value": 289
-          },
-          {
-            "column_index": 4,
-            "header": "玄関",
-            "value": 166
+            "header": "列ヘッダーC",
+            "value": 890
           }
         ]
       }
     ]
   },
   {
-    "year": "2023",
-    "indicator": "6－②．㎡あたり開口部数",
-    "code_display": "6－②",
+    "year": "YYYY",
+    "indicator": "Z．別のタイトル例",
+    "code_display": "Z",
     "code": {
       "part": null,
-      "chapter": 6,
-      "section": 2,
+      "chapter": 2,
+      "section": null,
       "item": null
     },
-    "page": 42,
+    "page": 99,
     "総計": [
       {
+        "page_column_index": 4,
         "column_index": 1,
-        "header": "窓",
+        "header": "列ヘッダーD",
         "value": 0.95
       },
       {
+        "page_column_index": 5,
         "column_index": 2,
-        "header": "勝手口",
+        "header": "列ヘッダーE",
         "value": 0.14
-      },
-      {
-        "column_index": 3,
-        "header": "玄関",
-        "value": 0.07
       }
     ],
     "データ一覧": [
@@ -267,19 +260,16 @@
         "name": "北海道",
         "columns": [
           {
+            "page_column_index": 4,
             "column_index": 1,
-            "header": "窓",
+            "header": "列ヘッダーD",
             "value": 0.92
           },
           {
+            "page_column_index": 5,
             "column_index": 2,
-            "header": "勝手口",
+            "header": "列ヘッダーE",
             "value": 0.13
-          },
-          {
-            "column_index": 3,
-            "header": "玄関",
-            "value": 0.08
           }
         ]
       }
@@ -289,7 +279,8 @@
 ```
 
 **重要な注意事項:**
-- 上記の例における列ヘッダー名（「窓＋勝手口＋玄関」「窓」など）や`indicator`の値は、あくまで**例示**です。
+- 上記の例における列ヘッダー名（「列ヘッダーA」「列ヘッダーB」など）や`indicator`の値は、あくまで**構造を示すダミーデータ**です。
 - 実際の出力では、**画像とHTMLに書かれている文字列をそのまま使用**してください。
-- 親ヘッダーと子ヘッダーを結合せず、**各データ列の直上のヘッダーのみ**を`header`として使用してください。
-- `column_index`により、同じ`indicator`内で`header`が重複していても一意に識別できます。
+- 複数階層の列ヘッダーは適切に結合して`header`として使用してください。ただし、大タイトル（`indicator`）は別のキーに格納されるため、列ヘッダーと結合しません。
+- `page_column_index`はページ全体での列位置を示し、`column_index`は各indicator内での列位置を示します。
+- 上記の例では、1つ目のindicatorが3列（page_column_index: 1-3）、2つ目のindicatorが2列（page_column_index: 4-5）を持つことを示しています。
